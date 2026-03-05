@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Peramalan Nilai Siswa - SES</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f8f8f8; }
+    .container { display: flex; }
+    .sidebar { width: 220px; background: #2f3542; color: white; min-height: 100vh; padding: 20px 0; }
+    .sidebar h2 { text-align: center; margin-bottom: 20px; }
+    .menu { list-style: none; padding: 0; }
+    .menu li { padding: 12px 20px; cursor: pointer; }
+    .menu li:hover, .menu li.active { background: #57606f; }
+    .content { flex: 1; padding: 20px; }
+    .card { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+    .card h3 { margin-top: 0; }
+    select, input[type="text"], input[type="number"] { padding: 6px 10px; margin: 10px 5px 10px 0; border: 1px solid #ccc; border-radius: 6px; }
+    .process-btn { width: 100%; background: #2f3542; color: white; padding: 12px; margin-top: 15px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }
+    .process-btn:hover { background: #666; }
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    table, th, td { border: 1px solid #aaa; }
+    th, td { padding: 8px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <h2>Nilai Siswa Kita</h2>
+      <ul class="menu">
+        <li class="active">📈 Peramalan</li>
+        <li>🏆 Perangkingan</li>
+        <li>🧠 Sistem Pakar</li>
+      </ul>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+      <h1>Peramalan</h1>
+      <p>Upload Data Excel (Nama Siswa, Mata Pelajaran, Bulan, Nilai Aktual)</p>
+
+      <!-- Upload -->
+      <div class="card">
+        <h3>Unggah Data</h3>
+        <input type="file" id="fileInput" />
+      </div>
+
+     <!-- Pilihan -->
+      <select id="namaSiswa">
+        <option value="" disabled selected>Nama Siswa</option>
+      </select>
+      <select id="mataPelajaran">
+        <option value="" disabled selected>Mata Pelajaran</option>
+      </select>
+      <input type="number" id="alpha" placeholder="Smoothing Constant (α)" step="0.1" min="0" max="1">
+      <button class="process-btn" onclick="prosesPeramalan()">Proses Peramalan</button>
+
+      <!-- Grafik -->
+      <div class="card">
+        <h3>Grafik Aktual vs Peramalan</h3>
+        <canvas id="chartCanvas" height="120"></canvas>
+      </div>
+
+     <!-- Hasil -->
+      <div class="card">
+        <h3>Hasil Peramalan (Tabel)</h3>
+        <table id="resultTable">
+          <thead>
+            <tr><th>Bulan</th><th>Nilai Aktual</th><th>Hasil Peramalan</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <button class="process-btn" onclick="exportExcel()">Export Excel</button>
+      </div>
+
+    </div>
+  </div>
+
+
+
+<script>
+let rawData = [];
+let chartInstance = null;
+
+document.getElementById('fileInput').addEventListener('change', handleFile);
+
+function exportExcel() {
+  const siswa = document.getElementById("namaSiswa").value;
+  const mapel = document.getElementById("mataPelajaran").value;
+  const alpha = document.getElementById("alpha").value;
+
+  // --- Buat workbook baru
+  const wb = XLSX.utils.book_new();
+
+  // --- Sheet 1: Info Parameter
+  const infoData = [
+    ["Nama Siswa", siswa],
+    ["Mata Pelajaran", mapel],
+    ["Smoothing Constant (α)", alpha]
+  ];
+  const wsInfo = XLSX.utils.aoa_to_sheet(infoData);
+  XLSX.utils.book_append_sheet(wb, wsInfo, "Info");
+
+  // --- Sheet 2: Tabel Hasil Peramalan
+  const table = document.getElementById("resultTable");
+  const wsTable = XLSX.utils.table_to_sheet(table);
+  XLSX.utils.book_append_sheet(wb, wsTable, "Hasil Peramalan");
+
+  // --- Download file
+  XLSX.writeFile(wb, `hasil_peramalan_${siswa}_${mapel}.xlsx`);
+}
+
+
+
+function handleFile(e) {
+  const file = e.target.files[0];
+  const reader = new FileReader();
+  reader.onload = function(event) {
+    const data = new Uint8Array(event.target.result);
+    const workbook = XLSX.read(data, {type: 'array'});
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    rawData = XLSX.utils.sheet_to_json(sheet);
+
+    // --- Ambil nama siswa ---
+    const siswaSet = new Set(rawData.map(r => r["Nama"]));
+
+    // --- Ambil mata pelajaran dari header ---
+    const headers = XLSX.utils.sheet_to_json(sheet, {header:1})[0]; 
+    const exclude = ["ID","Nama","Bulan","Rata_rata","Kehadiran_pct","Prestasi","Minat_Utama"];
+    const mapelSet = new Set(headers.filter(h => !exclude.includes(h)));
+
+    // isi dropdown otomatis
+    fillDropdown("namaSiswa", siswaSet);
+    fillDropdown("mataPelajaran", mapelSet);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function fillDropdown(id, values) {
+  const select = document.getElementById(id);
+
+  // hapus semua option selain placeholder
+  const placeholder = select.querySelector('option[disabled]');
+  select.innerHTML = '';
+  if(placeholder) select.appendChild(placeholder);
+
+  values.forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = v; 
+    opt.textContent = v;
+    select.appendChild(opt);
+  });
+
+  // pilih otomatis opsi pertama (setelah placeholder)
+  if(values.size > 0) select.selectedIndex = 1; 
+}
+
+function prosesPeramalan() {
+  const siswa = document.getElementById("namaSiswa").value;
+  const mapel = document.getElementById("mataPelajaran").value;
+  const alpha = parseFloat(document.getElementById("alpha").value);
+
+  if(isNaN(alpha) || alpha <= 0 || alpha >= 1) {
+    alert("Masukkan nilai α (0 < α < 1)");
+    return;
+  }
+
+  const dataFiltered = rawData
+    .filter(row => row["Nama"] === siswa)
+    .map(row => ({
+      Bulan: row["Bulan"],
+      Nilai: row[mapel]
+    }));
+
+  if(dataFiltered.length === 0) {
+    alert("Data tidak ditemukan.");
+    return;
+  }
+
+  dataFiltered.sort((a,b)=> a["Bulan"] > b["Bulan"] ? 1 : -1);
+
+  const namaBulan = ["Januari","Februari","Maret","April","Mei","Juni","Juli",
+                     "Agustus","September","Oktober","November","Desember"];
+
+let hasil = [];
+let Ft = dataFiltered[0]["Nilai"]; // inisialisasi ramalan awal
+dataFiltered.forEach((row, i) => {
+  let Xt = row["Nilai"];
+  let bulanNum = parseInt(String(row["Bulan"]).split("-")[1] || row["Bulan"], 10) - 1;
+  let bulanNama = namaBulan[bulanNum];
+
+  if (i === 0) {
+    // bulan pertama → ramalan awal sama dengan nilai aktual
+    hasil.push({ 
+      bulan: bulanNama, 
+      aktual: Number(Xt.toFixed(2)), 
+      ramal: Number(Ft.toFixed(2)) 
+    });
+  } else {
+    // simpan ramalan untuk bulan sekarang (pakai Ft dari bulan sebelumnya)
+    hasil.push({ 
+      bulan: bulanNama, 
+      aktual: Number(Xt.toFixed(2)), 
+      ramal: Number(Ft.toFixed(2)) 
+    });
+
+    // update Ft untuk bulan berikutnya
+    Ft = alpha * Xt + (1 - alpha) * Ft;
+  }
+});
+
+// tampilkan tabel dengan pewarnaan KKM
+  const tbody = document.querySelector("#resultTable tbody");
+  tbody.innerHTML = "";
+  const KKM = 75; // batas minimal
+
+  hasil.forEach(r => {
+    const warnaAktual = r.aktual < KKM ? ' style="color:red; font-weight:bold;"' : "";
+    const warnaRamal  = r.ramal < KKM ? ' style="color:red; font-weight:bold;"' : "";
+
+    tbody.innerHTML += `<tr>
+      <td>${r.bulan}</td>
+      <td${warnaAktual}>${r.aktual ?? ""}</td>
+      <td${warnaRamal}>${r.ramal !== null ? r.ramal.toFixed(2) : "-"}</td>
+    </tr>`;
+  });
+
+
+  // tampilkan grafik
+  const labels = hasil.map(r=>r.bulan);
+  const aktual = hasil.map(r=>r.aktual);
+  const ramal = hasil.map(r=>r.ramal);
+
+  if(chartInstance) chartInstance.destroy();
+  const ctx = document.getElementById('chartCanvas').getContext('2d');
+  chartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: 'Aktual', data: aktual, borderColor: 'blue', fill: false },
+        { label: 'Peramalan', data: ramal, borderColor: 'red', fill: false }
+      ]
+    }
+  });
+}
+
+</script>
+</body>
+</html>
